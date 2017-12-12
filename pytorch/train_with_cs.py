@@ -64,7 +64,7 @@ parser.add_argument('--dropout', type=float, default=0.0,
                     help='dropout applied to layers (0 = no dropout)')
 
 # Training Arguments
-parser.add_argument('--epochs', type=int, default=1000000,
+parser.add_argument('--epochs', type=int, default=15,
                     help='maximum number of epochs')
 parser.add_argument('--min_epochs', type=int, default=6,
                     help="minimum number of epochs to train for")
@@ -135,55 +135,17 @@ if torch.cuda.is_available():
 # Load data
 ###############################################################################
 
-# ---- new by evan
-sys.path.insert(0, '/home/ubuntu/nlprinceton')
-# code to add a compressed sensing encoder/decoder
-from nlp.embed import *
-from nlp.load import *
-
-docs, _ = sst('train')
-documents = tokenize(docs)
-divchar = "|"
-bg_docs = [["<sos>" + divchar + document[0]] + [(document[i] + divchar + document[i + 1]) for i in range(len(document) - 1)] + [document[-1]+divchar+"<eos>"] for document in documents]
-bg_docs = np.array(bg_docs)
-all_grams = {gram for document in bg_docs for gram in document}
-
-# def shuffle_and_split(data, target, num_train):
-#     perm = np.random.permutation(len(target))
-#     X = data[perm]
-#     y = target[perm]
-#     return (X[:num_train, :], y[:num_train], X[num_train:, :], y[num_train:])
-def shuffle_and_split(data, num_train):
-    perm = np.random.permutation(len(data))
-    X = data[perm]
-    return (X[:num_train, :], X[num_train:, :])
-
-import pickle
-with open('doable_list.P', 'rb') as fp:
-    doable_list = pickle.load(fp)
-
-doable_idxs = [x[0] for x in doable_list]
-doable_docs = [bg_docs[i] for i in doable_idxs]
-doable_docs = np.array(doable_docs)
-
-# create CS encoder
-from models import CSEncoder
-cs = CSEncoder(all_grams)
-
-encoded_doables = cs.compress(doable_docs)
-        
 # create corpus
-# corpus = Corpus(args.data_path,
-#                 maxlen=args.maxlen,
-#                 vocab_size=args.vocab_size,
-#                 lowercase=args.lowercase)
+corpus = Corpus(args.data_path,
+                maxlen=args.maxlen,
+                vocab_size=args.vocab_size,
+                lowercase=args.lowercase)
 # dumping vocabulary
-# with open('./output/{}/vocab.json'.format(args.outf), 'w') as f:
-#     json.dump(corpus.dictionary.word2idx, f)
+with open('./output/{}/vocab.json'.format(args.outf), 'w') as f:
+    json.dump(corpus.dictionary.word2idx, f)
 
 # save arguments
-# ntokens = len(corpus.dictionary.word2idx)
-ntokens = len(all_grams)
+ntokens = len(corpus.dictionary.word2idx)
 print("Vocabulary Size: {}".format(ntokens))
 args.ntokens = ntokens
 with open('./output/{}/args.json'.format(args.outf), 'w') as f:
@@ -193,28 +155,8 @@ with open("./output/{}/logs.txt".format(args.outf), 'w') as f:
     f.write("\n\n")
 
 eval_batch_size = 10
-# test_data = batchify(corpus.test, eval_batch_size, shuffle=False)
-# train_data = batchify(corpus.train, args.batch_size, shuffle=True)
-traind, testd = shuffle_and_split(encoded_doables, int(len(encoded_doables) * 0.8))
-
-def my_batchify(data, bsz, shuffle=False, gpu=False):
-    if shuffle:
-        np.random.shuffle(data)
-    nbatch = len(data) // bsz
-    batches = []
-
-    for i in range(nbatch):
-        batch = data[i*bsz:(i+1)*bsz]
-        batch = torch.FloatTensor(np.array(batch))
-        if gpu:
-            batch = batch.cuda()
-
-        batches.append(batch)
-
-    return batches
-
-train_data = my_batchify(traind, args.batch_size, shuffle=True)
-test_data = my_batchify(testd, eval_batch_size, shuffle=False)
+test_data = batchify(corpus.test, eval_batch_size, shuffle=False)
+train_data = batchify(corpus.train, args.batch_size, shuffle=True)
 
 print("Loaded data!")
 
@@ -222,27 +164,24 @@ print("Loaded data!")
 # Build the models
 ###############################################################################
 
-# ntokens = len(corpus.dictionary.word2idx)
-ntokens = len(all_grams)
-# autoencoder = Seq2Seq(emsize=args.emsize,
-#                       nhidden=args.nhidden,
-#                       ntokens=ntokens,
-#                       nlayers=args.nlayers,
-#                       noise_radius=args.noise_radius,
-#                       hidden_init=args.hidden_init,
-#                       dropout=args.dropout,
-#                       gpu=args.cuda)
+ntokens = len(corpus.dictionary.word2idx)
+autoencoder = Seq2Seq(emsize=args.emsize,
+                      nhidden=args.nhidden,
+                      ntokens=ntokens,
+                      nlayers=args.nlayers,
+                      noise_radius=args.noise_radius,
+                      hidden_init=args.hidden_init,
+                      dropout=args.dropout,
+                      gpu=args.cuda)
 
-# gan_gen = MLP_G(ninput=args.z_size, noutput=args.nhidden, layers=args.arch_g)
-gan_gen = MLP_G(ninput=args.z_size, noutput=len(encoded_doables[0]), layers=args.arch_g)
-# gan_disc = MLP_D(ninput=args.nhidden, noutput=1, layers=args.arch_d)
-gan_disc = MLP_D(ninput=len(encoded_doables[0]), noutput=1, layers=args.arch_d)
+gan_gen = MLP_G(ninput=args.z_size, noutput=args.nhidden, layers=args.arch_g)
+gan_disc = MLP_D(ninput=args.nhidden, noutput=1, layers=args.arch_d)
 
-# print(autoencoder)
+print(autoencoder)
 print(gan_gen)
 print(gan_disc)
 
-# optimizer_ae = optim.SGD(autoencoder.parameters(), lr=args.lr_ae)
+optimizer_ae = optim.SGD(autoencoder.parameters(), lr=args.lr_ae)
 optimizer_gan_g = optim.Adam(gan_gen.parameters(),
                              lr=args.lr_gan_g,
                              betas=(args.beta1, 0.999))
@@ -253,7 +192,7 @@ optimizer_gan_d = optim.Adam(gan_disc.parameters(),
 criterion_ce = nn.CrossEntropyLoss()
 
 if args.cuda:
-    # autoencoder = autoencoder.cuda()
+    autoencoder = autoencoder.cuda()
     gan_gen = gan_gen.cuda()
     gan_disc = gan_disc.cuda()
     criterion_ce = criterion_ce.cuda()
@@ -265,156 +204,120 @@ if args.cuda:
 
 def save_model():
     print("Saving models")
-    # with open('./output/{}/autoencoder_model.pt'.format(args.outf), 'wb') as f:
-    #     torch.save(autoencoder.state_dict(), f)
-    with open('./output/{}/cs_model.pt'.format(args.outf), 'wb') as f:
-        torch.save(cs, f) 
+    with open('./output/{}/autoencoder_model.pt'.format(args.outf), 'wb') as f:
+        torch.save(autoencoder.state_dict(), f)
     with open('./output/{}/gan_gen_model.pt'.format(args.outf), 'wb') as f:
         torch.save(gan_gen.state_dict(), f)
     with open('./output/{}/gan_disc_model.pt'.format(args.outf), 'wb') as f:
         torch.save(gan_disc.state_dict(), f)
 
 
-# def evaluate_autoencoder(data_source, epoch):
-#     # Turn on evaluation mode which disables dropout.
-#     autoencoder.eval()
-#     total_loss = 0
-#     ntokens = len(corpus.dictionary.word2idx)
-#     all_accuracies = 0
-#     bcnt = 0
-#     for i, batch in enumerate(data_source):
-#         source, target, lengths = batch
-#         source = to_gpu(args.cuda, Variable(source, volatile=True))
-#         target = to_gpu(args.cuda, Variable(target, volatile=True))
+def evaluate_autoencoder(data_source, epoch):
+    # Turn on evaluation mode which disables dropout.
+    autoencoder.eval()
+    total_loss = 0
+    ntokens = len(corpus.dictionary.word2idx)
+    all_accuracies = 0
+    bcnt = 0
+    for i, batch in enumerate(data_source):
+        source, target, lengths = batch
+        source = to_gpu(args.cuda, Variable(source, volatile=True))
+        target = to_gpu(args.cuda, Variable(target, volatile=True))
 
-#         mask = target.gt(0)
-#         masked_target = target.masked_select(mask)
-#         # examples x ntokens
-#         output_mask = mask.unsqueeze(1).expand(mask.size(0), ntokens)
+        mask = target.gt(0)
+        masked_target = target.masked_select(mask)
+        # examples x ntokens
+        output_mask = mask.unsqueeze(1).expand(mask.size(0), ntokens)
 
-#         # output: batch x seq_len x ntokens
-#         output = autoencoder(source, lengths, noise=True)
-#         flattened_output = output.view(-1, ntokens)
+        # output: batch x seq_len x ntokens
+        output = autoencoder(source, lengths, noise=True)
+        flattened_output = output.view(-1, ntokens)
 
-#         masked_output = \
-#             flattened_output.masked_select(output_mask).view(-1, ntokens)
-#         total_loss += criterion_ce(masked_output/args.temp, masked_target).data
+        masked_output = \
+            flattened_output.masked_select(output_mask).view(-1, ntokens)
+        total_loss += criterion_ce(masked_output/args.temp, masked_target).data
 
-#         # accuracy
-#         max_vals, max_indices = torch.max(masked_output, 1)
-#         all_accuracies += \
-#             torch.mean(max_indices.eq(masked_target).float()).data[0]
-#         bcnt += 1
+        # accuracy
+        max_vals, max_indices = torch.max(masked_output, 1)
+        all_accuracies += \
+            torch.mean(max_indices.eq(masked_target).float()).data[0]
+        bcnt += 1
 
-#         aeoutf = "./output/%s/%d_autoencoder.txt" % (args.outf, epoch)
-#         with open(aeoutf, "a") as f:
-#             max_values, max_indices = torch.max(output, 2)
-#             max_indices = \
-#                 max_indices.view(output.size(0), -1).data.cpu().numpy()
-#             target = target.view(output.size(0), -1).data.cpu().numpy()
-#             for t, idx in zip(target, max_indices):
-#                 # real sentence
-#                 chars = " ".join([corpus.dictionary.idx2word[x] for x in t])
-#                 f.write(chars)
-#                 f.write("\n")
-#                 # autoencoder output sentence
-#                 chars = " ".join([corpus.dictionary.idx2word[x] for x in idx])
-#                 f.write(chars)
-#                 f.write("\n\n")
+        aeoutf = "./output/%s/%d_autoencoder.txt" % (args.outf, epoch)
+        with open(aeoutf, "a") as f:
+            max_values, max_indices = torch.max(output, 2)
+            max_indices = \
+                max_indices.view(output.size(0), -1).data.cpu().numpy()
+            target = target.view(output.size(0), -1).data.cpu().numpy()
+            for t, idx in zip(target, max_indices):
+                # real sentence
+                chars = " ".join([corpus.dictionary.idx2word[x] for x in t])
+                f.write(chars)
+                f.write("\n")
+                # autoencoder output sentence
+                chars = " ".join([corpus.dictionary.idx2word[x] for x in idx])
+                f.write(chars)
+                f.write("\n\n")
 
-#     return total_loss[0] / len(data_source), all_accuracies/bcnt
+    return total_loss[0] / len(data_source), all_accuracies/bcnt
 
 
 def evaluate_generator(noise, epoch):
     gan_gen.eval()
-    # autoencoder.eval()
+    autoencoder.eval()
 
     # generate from fixed random noise
     fake_hidden = gan_gen(noise)
-    # max_indices = \
-    #     autoencoder.generate(fake_hidden, args.maxlen, sample=args.sample)
-    gen_words = cs.getwords(fake_hidden.data.cpu().numpy())
-    gen_docs = cs.reconstruct_all(gen_words)
+    max_indices = \
+        autoencoder.generate(fake_hidden, args.maxlen, sample=args.sample)
 
     with open("./output/%s/%s_generated.txt" % (args.outf, epoch), "w") as f:
-        # max_indices = max_indices.data.cpu().numpy()
-        # for idx in max_indices:
-        #     # generated sentence
-        #     words = [corpus.dictionary.idx2word[x] for x in idx]
-        #     # truncate sentences to first occurrence of <eos>
-        #     truncated_sent = []
-        #     for w in words:
-        #         if w != '<eos>':
-        #             truncated_sent.append(w)
-        #         else:
-        #             break
-        #     chars = " ".join(truncated_sent)
-        #     f.write(chars)
-        #     f.write("\n")
-
-        f.write("genwords:\n")
-        for words in gen_words:
-            f.write(" ".join(words))
+        max_indices = max_indices.data.cpu().numpy()
+        for idx in max_indices:
+            # generated sentence
+            words = [corpus.dictionary.idx2word[x] for x in idx]
+            # truncate sentences to first occurrence of <eos>
+            truncated_sent = []
+            for w in words:
+                if w != '<eos>':
+                    truncated_sent.append(w)
+                else:
+                    break
+            chars = " ".join(truncated_sent)
+            f.write(chars)
             f.write("\n")
 
-        f.write("doc:\n")
-        for doc in gen_docs:
-            f.write(" ".join(doc))
-            f.write("\n")
 
-def train_lm(eval_path, save_path): # TODO
-
+def train_lm(eval_path, save_path):
     # generate examples
-    examples = []
+    indices = []
     noise = to_gpu(args.cuda, Variable(torch.ones(100, args.z_size)))
     for i in range(1000):
         noise.data.normal_(0, 1)
 
         fake_hidden = gan_gen(noise)
-        gen_words = cs.getwords(fake_hidden.data.cpu().numpy())
-        gen_docs = cs.reconstruct_all(gen_words)
-        examples.append(gen_docs)
+        max_indices = autoencoder.generate(fake_hidden, args.maxlen)
+        indices.append(max_indices.data.cpu().numpy())
 
-    examples = np.concatenate(examples, axis=0)
+    indices = np.concatenate(indices, axis=0)
 
     # write generated sentences to text file
     with open(save_path+".txt", "w") as f:
         # laplacian smoothing
-        for document in documents:
-            for word in document:
-                f.write(word+"\n")
-        for example in examples:
-            f.write(" ".join(example) + "\n")
-
-    # generate examples
-    # indices = []
-    # noise = to_gpu(args.cuda, Variable(torch.ones(100, args.z_size)))
-    # for i in range(1000):
-    #     noise.data.normal_(0, 1)
-
-    #     fake_hidden = gan_gen(noise)
-    #     max_indices = autoencoder.generate(fake_hidden, args.maxlen)
-    #     indices.append(max_indices.data.cpu().numpy())
-
-    # indices = np.concatenate(indices, axis=0)
-
-    # # write generated sentences to text file
-    # with open(save_path+".txt", "w") as f:
-    #     # laplacian smoothing
-    #     for word in corpus.dictionary.word2idx.keys():
-    #         f.write(word+"\n")
-    #     for idx in indices:
-    #         # generated sentence
-    #         words = [corpus.dictionary.idx2word[x] for x in idx]
-    #         # truncate sentences to first occurrence of <eos>
-    #         truncated_sent = []
-    #         for w in words:
-    #             if w != '<eos>':
-    #                 truncated_sent.append(w)
-    #             else:
-    #                 break
-    #         chars = " ".join(truncated_sent)
-    #         f.write(chars+"\n")
+        for word in corpus.dictionary.word2idx.keys():
+            f.write(word+"\n")
+        for idx in indices:
+            # generated sentence
+            words = [corpus.dictionary.idx2word[x] for x in idx]
+            # truncate sentences to first occurrence of <eos>
+            truncated_sent = []
+            for w in words:
+                if w != '<eos>':
+                    truncated_sent.append(w)
+                else:
+                    break
+            chars = " ".join(truncated_sent)
+            f.write(chars+"\n")
 
     # train language model on generated examples
     lm = train_ngram_lm(kenlm_path=args.kenlm_path,
@@ -431,63 +334,63 @@ def train_lm(eval_path, save_path): # TODO
     return ppl
 
 
-# def train_ae(batch, total_loss_ae, start_time, i):
-#     autoencoder.train()
-#     autoencoder.zero_grad()
+def train_ae(batch, total_loss_ae, start_time, i):
+    autoencoder.train()
+    autoencoder.zero_grad()
 
-#     source, target, lengths = batch
-#     source = to_gpu(args.cuda, Variable(source))
-#     target = to_gpu(args.cuda, Variable(target))
+    source, target, lengths = batch
+    source = to_gpu(args.cuda, Variable(source))
+    target = to_gpu(args.cuda, Variable(target))
 
-#     # Create sentence length mask over padding
-#     mask = target.gt(0)
-#     masked_target = target.masked_select(mask)
-#     # examples x ntokens
-#     output_mask = mask.unsqueeze(1).expand(mask.size(0), ntokens)
+    # Create sentence length mask over padding
+    mask = target.gt(0)
+    masked_target = target.masked_select(mask)
+    # examples x ntokens
+    output_mask = mask.unsqueeze(1).expand(mask.size(0), ntokens)
 
-#     # output: batch x seq_len x ntokens
-#     output = autoencoder(source, lengths, noise=True)
+    # output: batch x seq_len x ntokens
+    output = autoencoder(source, lengths, noise=True)
 
-#     # output_size: batch_size, maxlen, self.ntokens
-#     flattened_output = output.view(-1, ntokens)
+    # output_size: batch_size, maxlen, self.ntokens
+    flattened_output = output.view(-1, ntokens)
 
-#     masked_output = \
-#         flattened_output.masked_select(output_mask).view(-1, ntokens)
-#     loss = criterion_ce(masked_output/args.temp, masked_target)
-#     loss.backward()
+    masked_output = \
+        flattened_output.masked_select(output_mask).view(-1, ntokens)
+    loss = criterion_ce(masked_output/args.temp, masked_target)
+    loss.backward()
 
-#     # `clip_grad_norm` to prevent exploding gradient in RNNs / LSTMs
-#     torch.nn.utils.clip_grad_norm(autoencoder.parameters(), args.clip)
-#     optimizer_ae.step()
+    # `clip_grad_norm` to prevent exploding gradient in RNNs / LSTMs
+    torch.nn.utils.clip_grad_norm(autoencoder.parameters(), args.clip)
+    optimizer_ae.step()
 
-#     total_loss_ae += loss.data
+    total_loss_ae += loss.data
 
-#     accuracy = None
-#     if i % args.log_interval == 0 and i > 0:
-#         # accuracy
-#         probs = F.softmax(masked_output)
-#         max_vals, max_indices = torch.max(probs, 1)
-#         accuracy = torch.mean(max_indices.eq(masked_target).float()).data[0]
+    accuracy = None
+    if i % args.log_interval == 0 and i > 0:
+        # accuracy
+        probs = F.softmax(masked_output)
+        max_vals, max_indices = torch.max(probs, 1)
+        accuracy = torch.mean(max_indices.eq(masked_target).float()).data[0]
 
-#         cur_loss = total_loss_ae[0] / args.log_interval
-#         elapsed = time.time() - start_time
-#         print('| epoch {:3d} | {:5d}/{:5d} batches | ms/batch {:5.2f} | '
-#               'loss {:5.2f} | ppl {:8.2f} | acc {:8.2f}'
-#               .format(epoch, i, len(train_data),
-#                       elapsed * 1000 / args.log_interval,
-#                       cur_loss, math.exp(cur_loss), accuracy))
+        cur_loss = total_loss_ae[0] / args.log_interval
+        elapsed = time.time() - start_time
+        print('| epoch {:3d} | {:5d}/{:5d} batches | ms/batch {:5.2f} | '
+              'loss {:5.2f} | ppl {:8.2f} | acc {:8.2f}'
+              .format(epoch, i, len(train_data),
+                      elapsed * 1000 / args.log_interval,
+                      cur_loss, math.exp(cur_loss), accuracy))
 
-#         with open("./output/{}/logs.txt".format(args.outf), 'a') as f:
-#             f.write('| epoch {:3d} | {:5d}/{:5d} batches | ms/batch {:5.2f} | '
-#                     'loss {:5.2f} | ppl {:8.2f} | acc {:8.2f}\n'.
-#                     format(epoch, i, len(train_data),
-#                            elapsed * 1000 / args.log_interval,
-#                            cur_loss, math.exp(cur_loss), accuracy))
+        with open("./output/{}/logs.txt".format(args.outf), 'a') as f:
+            f.write('| epoch {:3d} | {:5d}/{:5d} batches | ms/batch {:5.2f} | '
+                    'loss {:5.2f} | ppl {:8.2f} | acc {:8.2f}\n'.
+                    format(epoch, i, len(train_data),
+                           elapsed * 1000 / args.log_interval,
+                           cur_loss, math.exp(cur_loss), accuracy))
 
-#         total_loss_ae = 0
-#         start_time = time.time()
+        total_loss_ae = 0
+        start_time = time.time()
 
-#     return total_loss_ae, start_time
+    return total_loss_ae, start_time
 
 
 def train_gan_g():
@@ -508,18 +411,18 @@ def train_gan_g():
     return errG
 
 
-# def grad_hook(grad):
-#     # Gradient norm: regularize to be same
-#     # code_grad_gan * code_grad_ae / norm(code_grad_gan)
-#     if args.enc_grad_norm:
-#         gan_norm = torch.norm(grad, 2, 1).detach().data.mean()
-#         normed_grad = grad * autoencoder.grad_norm / gan_norm
-#     else:
-#         normed_grad = grad
+def grad_hook(grad):
+    # Gradient norm: regularize to be same
+    # code_grad_gan * code_grad_ae / norm(code_grad_gan)
+    if args.enc_grad_norm:
+        gan_norm = torch.norm(grad, 2, 1).detach().data.mean()
+        normed_grad = grad * autoencoder.grad_norm / gan_norm
+    else:
+        normed_grad = grad
 
-#     # weight factor and sign flip
-#     normed_grad *= -math.fabs(args.gan_toenc)
-#     return normed_grad
+    # weight factor and sign flip
+    normed_grad *= -math.fabs(args.gan_toenc)
+    return normed_grad
 
 
 def train_gan_d(batch):
@@ -527,26 +430,23 @@ def train_gan_d(batch):
     for p in gan_disc.parameters():
         p.data.clamp_(-args.gan_clamp, args.gan_clamp)
 
-    # autoencoder.train()
-    # autoencoder.zero_grad()
+    autoencoder.train()
+    autoencoder.zero_grad()
     gan_disc.train()
     gan_disc.zero_grad()
 
     # positive samples ----------------------------
     # generate real codes
-    # source, target, lengths = batch
-    # source = torch.from_numpy(batch)
-    source = batch
+    source, target, lengths = batch
     source = to_gpu(args.cuda, Variable(source))
-    # target = to_gpu(args.cuda, Variable(target))
+    target = to_gpu(args.cuda, Variable(target))
 
     # batch_size x nhidden
-    # real_hidden = autoencoder(source, lengths, noise=False, encode_only=True)
-    # real_hidden.register_hook(grad_hook)
+    real_hidden = autoencoder(source, lengths, noise=False, encode_only=True)
+    real_hidden.register_hook(grad_hook)
 
     # loss / backprop
-    # errD_real = gan_disc(real_hidden)
-    errD_real = gan_disc(source)
+    errD_real = gan_disc(real_hidden)
     errD_real.backward(one)
 
     # negative samples ----------------------------
@@ -561,10 +461,10 @@ def train_gan_d(batch):
     errD_fake.backward(mone)
 
     # `clip_grad_norm` to prvent exploding gradient problem in RNNs / LSTMs
-    # torch.nn.utils.clip_grad_norm(autoencoder.parameters(), args.clip)
+    torch.nn.utils.clip_grad_norm(autoencoder.parameters(), args.clip)
 
     optimizer_gan_d.step()
-    # optimizer_ae.step()
+    optimizer_ae.step()
     errD = -(errD_real - errD_fake)
 
     return errD, errD_real, errD_fake
@@ -590,7 +490,6 @@ mone = one * -1
 best_ppl = None
 impatience = 0
 all_ppl = []
-niter_global = 1
 for epoch in range(1, args.epochs+1):
     # update gan training schedule
     if epoch in gan_schedule:
@@ -603,53 +502,32 @@ for epoch in range(1, args.epochs+1):
     total_loss_ae = 0
     epoch_start_time = time.time()
     start_time = time.time()
-    niter = -1
+    niter = 0
+    niter_global = 1
 
     # loop through all batches in training data
-    while niter < len(train_data) - 1:
-        niter += 1
+    while niter < len(train_data):
 
-        train_gan_d(train_data[niter])
-        # train discriminator/critic
-        for i in range(args.niters_gan_d):
-            # feed a seen sample within this epoch; good for early training
-            errD, errD_real, errD_fake = \
-                train_gan_d(train_data[random.randint(0, len(train_data) - 1)])
-            # if niter >= len(train_data):
-            #     break
-            # errD, errD_real, errD_fake = train_gan_d(train_data[niter])
-            # niter += 1
+        # train autoencoder ----------------------------
+        for i in range(args.niters_ae):
+            if niter == len(train_data):
+                break  # end of epoch
+            total_loss_ae, start_time = \
+                train_ae(train_data[niter], total_loss_ae, start_time, niter)
+            niter += 1
 
-        # train generator
-        for i in range(args.niters_gan_g):
-            errG = train_gan_g()
+        # train gan ----------------------------------
+        for k in range(niter_gan):
 
-        
-        # # train autoencoder ----------------------------
-        # for i in range(args.niters_ae):
-        #     if niter == len(train_data):
-        #         break  # end of epoch
-        #     total_loss_ae, start_time = \
-        #         train_ae(train_data[niter], total_loss_ae, start_time, niter)
-        #     niter += 1
-        
-        # # for i in range(args.niters_ae):
-        # #     if niter == len(train_data):
-        # #         break # end of epoch
-        # #     niter += 1
+            # train discriminator/critic
+            for i in range(args.niters_gan_d):
+                # feed a seen sample within this epoch; good for early training
+                errD, errD_real, errD_fake = \
+                    train_gan_d(train_data[random.randint(0, len(train_data)-1)])
 
-        # # train gan ----------------------------------
-        # for k in range(niter_gan):
-
-        #     # train discriminator/critic
-        #     for i in range(args.niters_gan_d):
-        #         # feed a seen sample within this epoch; good for early training
-        #         errD, errD_real, errD_fake = \
-        #             train_gan_d(train_data[random.randint(0, len(train_data)-1)])
-
-        #     # train generator
-        #     for i in range(args.niters_gan_g):
-        #         errG = train_gan_g()
+            # train generator
+            for i in range(args.niters_gan_g):
+                errG = train_gan_g()
 
         niter_global += 1
         if niter_global % 100 == 0:
@@ -665,9 +543,9 @@ for epoch in range(1, args.epochs+1):
                            errD.data[0], errD_real.data[0],
                            errD_fake.data[0], errG.data[0]))
 
-            # # exponentially decaying noise on autoencoder
-            # autoencoder.noise_radius = \
-            #     autoencoder.noise_radius*args.noise_anneal
+            # exponentially decaying noise on autoencoder
+            autoencoder.noise_radius = \
+                autoencoder.noise_radius*args.noise_anneal
 
             if niter_global % 3000 == 0:
                 evaluate_generator(fixed_noise, "epoch{}_step{}".
@@ -705,11 +583,10 @@ for epoch in range(1, args.epochs+1):
                                       format(args.outf), 'a') as f:
                                 f.write("\nEnding Training\n")
                             sys.exit()
-        
+
     # end of epoch ----------------------------
     # evaluation
-    # test_loss, accuracy = evaluate_autoencoder(test_data, epoch)
-    test_loss, accuracy = 0,0
+    test_loss, accuracy = evaluate_autoencoder(test_data, epoch)
     print('-' * 89)
     print('| end of epoch {:3d} | time: {:5.2f}s | test loss {:5.2f} | '
           'test ppl {:5.2f} | acc {:3.3f}'.
@@ -754,6 +631,4 @@ for epoch in range(1, args.epochs+1):
                 sys.exit()
 
     # shuffle between epochs
-    train_data = my_batchify(traind, args.batch_size, shuffle=True)
-    if niter_global % 100 == 0:
-        save_model()
+    train_data = batchify(corpus.train, args.batch_size, shuffle=True)

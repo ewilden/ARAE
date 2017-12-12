@@ -97,6 +97,100 @@ class MLP_G(nn.Module):
                 layer.bias.data.fill_(0)
             except:
                 pass
+       
+    
+import sys 
+sys.path.insert(0, '/home/ubuntu/nlprinceton')
+# code to add a compressed sensing encoder/decoder
+from nlp.embed import *
+from nlp.load import *
+from nlp.recover import recover_features
+
+def dict_without(d, k, v):
+    d = dict(d)
+    ls = d[k]
+    ls = [x for x in ls if x != v]
+    if len(ls) == 0:
+        del d[k]
+    d[k] = ls
+    return d
+    
+def aux_recon(prev, m):
+    if prev == "<eos>":
+        return []
+    poss = m.get(prev, [])
+    tree = [[word] + aux_recon(word, dict_without(m, prev, word)) for word in poss]
+    ret = max(tree + [[]], key=len)
+    return ret
+
+def reconstruct_sentence(doc):
+    divchar = '|'
+    bigrams = [ gram.split(divchar) for gram in doc ]
+    bgmap = {}
+    for bigram in bigrams:
+        ls = bgmap.get(bigram[0], [])
+        ls.append(bigram[1])
+        bgmap[bigram[0]] = ls
+    return aux_recon("<sos>", bgmap)[:-1]
+
+class CSEncoder(nn.Module):
+    def __init__(self,
+                 # emsize, nhidden, ntokens, nlayers, noise_radius=0.2,
+                 # hidden_init=False, dropout=0, gpu=False,
+                 vocabulary):
+        super(CSEncoder, self).__init__()
+        self.vocabulary = vocabulary
+        compress_dim = 300 # 1000
+        self.compress_dim = compress_dim
+        w2v = vocab2vecs(vocabulary, dimension=compress_dim, random='Rademacher')
+        self.w2v = w2v
+        self.vocab_dim = list(self.w2v.values())[0].shape[0]
+        vocab = set(self.w2v.keys())
+        vocab = {(word,): i for i, word in enumerate(sorted(vocab))}
+        self.vocab = vocab
+        self.A = vocab2mat(vocab, random='Rademacher')
+        idx_to_word = {}
+        vecs = []
+        i = 0
+        mycmp = lambda x: x[1]
+        for k, v in sorted(vocab.items(), key=mycmp):
+            idx_to_word[i] = k[0]
+            i += 1
+        self.idx_to_word = idx_to_word
+        
+    def compress(self, docs):
+        bow = docs2bongs(docs, vocabulary=self.vocab)
+        return bow.dot(self.A)
+    
+    def recover(self, B, exact=False):
+        if exact:
+            return recover_features(self.A.T, B)
+        else: 
+            return recover_features(self.A.T, B, method='LASSO', alpha=1E-3)
+    
+    def getwords(self, B):
+        X = self.recover(B)
+        wordsetlist = []
+        for row in X:
+            wordsetlist.append({ self.idx_to_word[idx] for idx in row.nonzero()[1] })
+        return wordsetlist
+    
+    def reconstruct(self, doc):
+        return reconstruct_sentence(doc)
+
+    def reconstruct_all(self, docs):
+        return [reconstruct_sentence(doc) for doc in docs]
+    
+    def check_doable(self, docs):
+        B = self.compress(docs)
+        rec_docs = self.getwords(B)
+        checkfn = lambda a, b, c: a == b and a == c + 1
+        return ([checkfn(len(docs[i]), len(rec_docs[i]), len(self.reconstruct(rec_docs[i]))) 
+                for i in range(len(docs)) ], [(len(docs[i]), len(rec_docs[i]), len(self.reconstruct(rec_docs[i]))) for i in range(len(docs))])
+
+    def forward(self, docs):
+        B = torch.from_numpy(self.compress(docs))
+        return Variable(B, requires_grad=True)
 
 
 class Seq2Seq(nn.Module):
